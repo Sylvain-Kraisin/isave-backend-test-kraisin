@@ -11,7 +11,13 @@ Rails.application.routes.draw do
   namespace :api do
     namespace :v1 do
       resources :customers, only: [] do
-        resources :portfolios, only: [:index]
+        resources :portfolios, only: [:index] do
+          resources :investments, only: [] do
+            post :deposit, on: :member
+            post :withdraw, on: :member
+          end
+          post :transfer, to: "transfers#create"
+        end
       end
     end
   end
