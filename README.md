@@ -1,87 +1,116 @@
 # WeSave Backend Challenge - iSave
-
-Version en Français [ici](README.fr.md).
-
 ## Requirements
 
 - `ruby` version 3.3.1
 - `sqlite3`
 
-## Introduction
 
-Welcome to the WeSave Tech Challenge!
-
-Your task is to build **the backend API** of a web app, iSave, that helps clients manage their investments based on their financial goals. The core of this application is based on portfolio management and financial indicators.
-
-## Submission Instructions
-
-- Clone this repository (do not fork it).
-- Implement the features described in [LEVELS.md](LEVELS.md).
-- Solve the levels in ascending order.
-- Write tests to cover the implemented functionality.
-- Ensure your code is well-documented. You are expected to provide instructions on how to run the application and use the API.
-- You can make as many commits as you’d like for each level. Every commit should follow the [Conventional Commit Standard](https://www.conventionalcommits.org/en/v1.0.0/), as follows:
-
-```txt
-<type>[optional scope]: <description>
-
-[optional body]
-
-[optional footer(s)]
-```
-
-Example:
-
-```txt
-chore(init): this is the first commit
-
-Add the basic requirements to the application
-
-Level-1
-```
-
-## Evaluation Criteria
-
-Your submission will be evaluated based on:
-
-- **Functionality**: How well does the backend meet the requirements?
-- **Code Quality**: Is the code well-organized, commented, and maintainable?
-- **Testing**: Are there adequate tests to ensure the functionality is correct and reliable?
 
 ## Setup Instructions
 
-1. Clone the repository (do not fork it): `git clone https://gitlab.com/anatec/wesave/isave-backend-test-2024.git`
+1. Clone the repository
 2. Install the required Ruby version (~>3.3.1)
 3. Install dependencies: `bundle install`
-4. Set up the database (if needed): `rake db:create db:migrate`
+4. Set up the database: `rake db:create db:migrate`
+5. Seed the data base: `rake db:seed`
 
-## Submitting Your Work
 
-When you have completed your work, please submit your results to your contact person at WeSave. You can either:
-- Share a link to your project on Github, Gitlab, or Bitbucket to one of the following handles:
-  - Github: `@nezih-anatec`
-  - Gitlab: `@nezih1`
-- OR zip your project directory (make sure to include the `.git` folder) and send it via email.
 
-## The Challenge
 
-In the [LEVELS.md](LEVELS.md) file, you will find 5 levels, each one progressively more difficult. Your task is to complete as many levels as possible within the time limit, showcasing your skills.
 
-## Time Estimates
+## Technical Documentation (Levels 1 and 2)
 
-Each level is designed to take between half an hour to 2 hours, depending on the complexity.
+### Domain model (DB-backed)
+- Customer: `first_name`, `last_name`
+- Portfolio: `customer:ref`, `name` (aka label), `kind` ("CTO"|"PEA"|"Assurance Vie"|"Livret A"), `total_amount`
+- Instrument: `isin` (unique), `kind` ("stock"|"bond"|"euro_fund"), `name`, `price`, `sri`
+- Investment: join `portfolio`×`instrument`, `amount` (money on that line), `weight` (share within portfolio)
+- Constraints
+  - Unique index on `investments(portfolio_id, instrument_id)` (one investment per instrument per portfolio)
+  - Only `CTO`, `PEA`, `Assurance Vie` may have investments; enforced at model level
 
-## Tips
+### Seeding
+- Seeds mirror `data/level_1/portfolios.json` and skip unsupported portfolio kinds (e.g., "Compte dépôt").
 
-- You are free to look ahead at the higher levels, but try to focus on completing the current level with the simplest solution possible.
-- As the levels become more complex, you will likely need to reuse and adapt previous code. A good approach is to use Object-Oriented Programming (OOP), adding new layers of abstraction when necessary, and writing tests to ensure you don't break any existing functionality.
-- Feel free to write "shameless code" at first and refactor it in later levels.
-- For the higher levels, we are interested in clean, extensible, and robust code. Pay attention to edge cases and use exceptions when needed.
+### API versioning and routing
+- All endpoints are under `/api/v1`.
+- Unknown API routes return a JSON 404 via `ErrorsController`.
 
-**Additional notes:**
-- Authentication is **not** required for this application.
-- You are allowed to use any publicly available gems.
-- All amounts should be stored as decimal.
-- All asset prices will be defined in the same currency.
+### Errors (JSON)
+- Shape: `{ error: { code, message, status } }`
+- Codes used: `not_found`, `validation_error`, `bad_request`, `not_eligible`.
 
-**Good luck!**
+### Level 1 – List portfolios datas for a customer
+- Route: `GET /api/v1/customers/:customer_id/portfolios`
+- Response shape mirrors the input file but is DB-backed.
+- Example
+```bash
+curl -s http://127.0.0.1:3000/api/v1/customers/1/portfolios | jq
+```
+- Response (excerpt)
+```json
+{
+  "contracts": [
+    {
+      "label": "PEA - Portefeuille Équilibré",
+      "type": "PEA",
+      "amount": 30000.0,
+      "lines": [
+        {
+          "type": "stock",
+          "isin": "FR0012345678",
+          "label": "iShares Core MSCI World ETF",
+          "price": 50.0,
+          "share": 0.34,
+          "amount": 20000.0,
+          "srri": 6
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Level 2 – Portfolio transactions (eligible kinds: CTO, PEA)
+- Operations are atomic (DB transactions) and delegated to PORO services under `app/services/transactions`.
+- Eligibility is enforced via the `Eligibility` controller concern.
+
+#### Deposit money into an existing investment
+- Route: `POST /api/v1/customers/:customer_id/portfolios/:portfolio_id/investments/:id/deposit`
+- Body: `{ "amount": <number> }`
+- Effects: increases the investment `amount` and the portfolio `total_amount`.
+- Codes: `204` on success; `400` invalid amount; `404` missing resources; `422 not_eligible`.
+
+#### Withdraw money from an existing investment
+- Route: `POST /api/v1/customers/:customer_id/portfolios/:portfolio_id/investments/:id/withdraw`
+- Body: `{ "amount": <number> }`
+- Effects: decreases the investment `amount` and the portfolio `total_amount`.
+- Guards: `amount` must be ≤ current investment `amount`.
+- Codes: `204` success; `400` invalid amount; `404`; `422` on insufficient funds or not eligible.
+
+#### Transfer money between investments (same portfolio)
+- Route: `POST /api/v1/customers/:customer_id/portfolios/:portfolio_id/transfer`
+- Body: `{ "from_instrument_id": <id>, "to_instrument_id": <id>, "amount": <number> }`
+- Effects: moves `amount` from source investment to destination; portfolio total unchanged.
+- Codes: `204` success; `400` invalid amount or same `from`/`to`; `404`; `422` insufficient funds or not eligible.
+
+#### Examples
+```bash
+# Deposit 100
+curl -X POST http://127.0.0.1:3000/api/v1/customers/1/portfolios/1/investments/2/deposit \
+  -H "Content-Type: application/json" -d '{"amount":100}' -i
+
+# Withdraw 50
+curl -X POST http://127.0.0.1:3000/api/v1/customers/1/portfolios/1/investments/2/withdraw \
+  -H "Content-Type: application/json" -d '{"amount":50}' -i
+
+# Transfer 75 from instrument 2 to 3
+curl -X POST http://127.0.0.1:3000/api/v1/customers/1/portfolios/1/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"from_instrument_id":2,"to_instrument_id":3,"amount":75}' -i
+```
+
+### Design notes
+- Controllers are skinny; business rules live in services (`Transactions::Deposit/Withdraw/Transfer`).
+- Eligibility is shared with `Eligibility` concern (`require_transaction_eligibility!`).
+- Request specs cover success and error cases; service specs cover unit-level rules.
