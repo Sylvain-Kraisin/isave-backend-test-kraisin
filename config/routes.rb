@@ -7,4 +7,15 @@ Rails.application.routes.draw do
 
   # Defines the root path route ("/")
   # root "posts#index"
+
+  namespace :api do
+    namespace :v1 do
+      resources :customers, only: [] do
+        resources :portfolios, only: [:index]
+      end
+    end
+  end
+
+  # JSON catch-all for unknown routes under /api
+  match "/api/*unmatched", to: "errors#not_found", via: :all
 end
